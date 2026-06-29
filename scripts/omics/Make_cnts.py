@@ -1,3 +1,6 @@
+# A general template used to make counts files for Deseq2 analysis
+
+
 import pandas as pd
 import os
 

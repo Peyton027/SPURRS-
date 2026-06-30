@@ -11,7 +11,8 @@ from scipy.cluster.hierarchy import linkage, leaves_list, dendrogram
 from scipy.spatial.distance import pdist
 
 INPUT_CSV = "centered_matrix.csv"
-OUTPUT_PDF = "Diabetic_vs_HF_individual_heatmap_hierarchical.pdf"
+OUTPUT_PDF = "Diabetes_vs_HeartFailure_individual_heatmap_fixed_sample_order.pdf"
+
 COLOR_LIMIT = 2.0
 HEATMAP_COLORS = ["#2166AC", "#F7F7F7", "#B2182B"]
 
@@ -29,11 +30,6 @@ HF_SAMPLES = [
 ]
 
 SAMPLE_ORDER = DIABETIC_SAMPLES + HF_SAMPLES
-
-COHORTS = [
-    ("Diabetic", 0, 6),
-    ("HFrEF", 7, 16)
-]
 
 
 def orient_linkage_by_score(tree, scores):
@@ -75,19 +71,23 @@ def orient_linkage_by_score(tree, scores):
     return tree
 
 
-def cluster_order(values, scores=None):
-    if values.shape[0] < 2:
-        return np.arange(values.shape[0]), None
+def cluster_rows(matrix):
+    if matrix.shape[0] < 2:
+        return np.arange(matrix.shape[0]), None
 
-    distances = pdist(values, metric=CLUSTER_METRIC)
+    distances = pdist(matrix, metric=CLUSTER_METRIC)
 
     tree = linkage(
         distances,
         method=LINKAGE_METHOD
     )
 
-    if scores is not None:
-        tree = orient_linkage_by_score(tree, scores)
+    row_scores = matrix.mean(axis=1)
+
+    tree = orient_linkage_by_score(
+        tree,
+        row_scores
+    )
 
     return leaves_list(tree), tree
 
@@ -102,7 +102,7 @@ def main():
 
     for col in ["gene_symbol", "major_class"]:
         if col not in df.columns:
-            raise ValueError(f"Missing required annotation column: {col}")
+            raise ValueError(f"Missing required column: {col}")
 
     missing_samples = [
         sample for sample in SAMPLE_ORDER
@@ -121,7 +121,7 @@ def main():
 
     if not np.isfinite(matrix).all():
         raise ValueError(
-            "All Diabetic and HF sample columns must contain finite numeric values."
+            "All sample columns must contain finite numeric values."
         )
 
     row_labels = [
@@ -132,56 +132,18 @@ def main():
         )
     ]
 
-    row_scores = matrix.mean(axis=1)
+    row_order, row_tree = cluster_rows(matrix)
 
-    row_order, row_tree = cluster_order(
-        matrix,
-        scores=row_scores
-    )
-
-    clustered_row_matrix = matrix[row_order, :]
-
-    column_order = []
-    cohort_trees = []
-
-    for cohort_name, start, end in COHORTS:
-        cohort_indices = np.arange(start, end + 1)
-
-        cohort_matrix = clustered_row_matrix[:, cohort_indices].T
-
-        local_order, cohort_tree = cluster_order(cohort_matrix)
-
-        ordered_indices = cohort_indices[local_order]
-
-        column_order.extend(ordered_indices.tolist())
-
-        cohort_trees.append(
-            (cohort_name, cohort_tree, len(ordered_indices))
-        )
-
-    column_order = np.array(column_order)
-
-    matrix = matrix[np.ix_(row_order, column_order)]
-
+    matrix = matrix[row_order, :]
     row_labels = np.array(row_labels)[row_order].tolist()
-    sample_order = np.array(SAMPLE_ORDER)[column_order].tolist()
 
-    cohort_codes_original = np.array(
+    n_genes = len(row_labels)
+    n_samples = len(SAMPLE_ORDER)
+
+    cohort_codes = np.array(
         [0] * len(DIABETIC_SAMPLES) +
         [1] * len(HF_SAMPLES)
     )
-
-    cohort_codes = cohort_codes_original[column_order]
-
-    n_genes = len(row_labels)
-    n_samples = len(sample_order)
-
-    cohort_sizes = [
-        len(DIABETIC_SAMPLES),
-        len(HF_SAMPLES)
-    ]
-
-    boundaries = np.cumsum(cohort_sizes)[:-1]
 
     fig_height = max(20, 0.22 * n_genes + 6)
 
@@ -190,7 +152,7 @@ def main():
     gs = fig.add_gridspec(
         4,
         4,
-        height_ratios=[0.55, 0.9, 0.18, 14],
+        height_ratios=[0.55, 0.12, 0.18, 14],
         width_ratios=[0.18, 0.28, 1.0, 0.035],
         hspace=0.06,
         wspace=0.025
@@ -209,7 +171,7 @@ def main():
     title_ax.text(
         0.5,
         0.70,
-        "Person-by-Person Ion-Channel / Transporter Expression Heatmap: Diabetic vs HFrEF",
+        "Person-by-Person Ion-Channel / Transporter Expression Heatmap: Diabetes vs Heart Failure",
         ha="center",
         va="center",
         fontsize=16,
@@ -219,37 +181,14 @@ def main():
     title_ax.text(
         0.5,
         0.20,
-        "Genes hierarchically clustered by Diabetic + HFrEF expression pattern and oriented from higher to lower mean centered expression; samples clustered within cohort",
+        "Genes hierarchically clustered by Diabetes + Heart Failure expression and oriented from higher to lower mean centered expression; samples retained in original order",
         ha="center",
         va="center",
         fontsize=9
     )
 
-    dendrogram_grid = gs[1, 2].subgridspec(
-        1,
-        2,
-        width_ratios=cohort_sizes,
-        wspace=0.03
-    )
-
-    for i, (cohort_name, cohort_tree, cohort_size) in enumerate(cohort_trees):
-        dend_ax = fig.add_subplot(dendrogram_grid[0, i])
-
-        if cohort_tree is not None:
-            dendrogram(
-                cohort_tree,
-                orientation="top",
-                no_labels=True,
-                color_threshold=0,
-                above_threshold_color="black",
-                ax=dend_ax
-            )
-
-        dend_ax.set_xticks([])
-        dend_ax.set_yticks([])
-
-        for spine in dend_ax.spines.values():
-            spine.set_visible(False)
+    top_ax = fig.add_subplot(gs[1, 2])
+    top_ax.axis("off")
 
     row_dend_ax = fig.add_subplot(gs[3, 0])
 
@@ -272,6 +211,7 @@ def main():
         spine.set_visible(False)
 
     labels_ax = fig.add_subplot(gs[3, 1])
+
     labels_ax.set_xlim(0, 1)
     labels_ax.set_ylim(n_genes - 0.5, -0.5)
     labels_ax.axis("off")
@@ -302,33 +242,33 @@ def main():
     strip_ax.set_xticks([])
     strip_ax.set_yticks([])
 
-    for boundary in boundaries:
-        strip_ax.axvline(
-            boundary - 0.5,
-            color="black",
-            linewidth=1.0
-        )
+    strip_ax.axvline(
+        len(DIABETIC_SAMPLES) - 0.5,
+        color="black",
+        linewidth=1.0
+    )
 
-    start = 0
+    strip_ax.text(
+        (len(DIABETIC_SAMPLES) - 1) / 2,
+        1.55,
+        "Diabetes",
+        transform=strip_ax.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        fontweight="bold"
+    )
 
-    for cohort_name, cohort_size in zip(
-        ["Diabetic", "HFrEF"],
-        cohort_sizes
-    ):
-        middle = start + (cohort_size - 1) / 2
-
-        strip_ax.text(
-            middle,
-            1.55,
-            cohort_name,
-            transform=strip_ax.get_xaxis_transform(),
-            ha="center",
-            va="bottom",
-            fontsize=9,
-            fontweight="bold"
-        )
-
-        start += cohort_size
+    strip_ax.text(
+        len(DIABETIC_SAMPLES) + (len(HF_SAMPLES) - 1) / 2,
+        1.55,
+        "Heart Failure",
+        transform=strip_ax.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        fontweight="bold"
+    )
 
     for spine in strip_ax.spines.values():
         spine.set_visible(False)
@@ -358,7 +298,7 @@ def main():
     heat_ax.set_xticks(np.arange(n_samples))
 
     heat_ax.set_xticklabels(
-        sample_order,
+        SAMPLE_ORDER,
         rotation=90,
         fontsize=8
     )
@@ -373,12 +313,11 @@ def main():
     heat_ax.set_xlim(-0.5, n_samples - 0.5)
     heat_ax.set_ylim(n_genes - 0.5, -0.5)
 
-    for boundary in boundaries:
-        heat_ax.axvline(
-            boundary - 0.5,
-            color="black",
-            linewidth=1.0
-        )
+    heat_ax.axvline(
+        len(DIABETIC_SAMPLES) - 0.5,
+        color="black",
+        linewidth=1.0
+    )
 
     cbar_ax = fig.add_subplot(gs[3, 3])
 
